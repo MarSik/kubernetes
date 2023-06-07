@@ -289,7 +289,31 @@ func (m *ManagerImpl) Start(activePods ActivePodsFunc, sourcesReady config.Sourc
 		klog.InfoS("Continue after failing to read checkpoint file. Device allocation info may NOT be up-to-date", "err", err)
 	}
 
-	return m.server.Start()
+	err = m.server.Start()
+	if err != nil {
+		return err
+	}
+
+	// Device manager plugin interface is up and running. Give plugins a few seconds to re-register
+	// if the checkpoint file indicates there should be running device plugins around.
+	// This could have been a "hot" kubelet restart that will check all running pods have their
+	// devices ready and evict them if that is not the case. However the device plugins
+	// need a bit of a time to properly re-register after losing the connection to kubelet.
+	//
+	// TLDR: Give time to device plugins to re-register before pods are re-admitted.
+	//
+	// The sleep here is just a stop-gap solution, something better is needed. However the blocking
+	// nature of the sleep here is what is wanted to block connection to api server and pod admission
+	// until the plugins were given at least a chance to reconnect.
+	// The behavior is a side effect of a more stringent device health checking from
+	// https://github.com/kubernetes/kubernetes/pull/116376
+	if len(m.healthyDevices) > 0 {
+		klog.Info("Give device plugins time to re-register to device manager")
+		time.Sleep(15 * time.Second)
+		klog.Info("Device plugins had enough time, continue starting the device manager.")
+	}
+
+	return nil
 }
 
 // Stop is the function that can stop the plugin server.
