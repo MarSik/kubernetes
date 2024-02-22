@@ -18,6 +18,7 @@ package cpumanager
 
 import (
 	"fmt"
+	"k8s.io/kubernetes/pkg/kubelet/managed"
 	"reflect"
 	"testing"
 
@@ -33,38 +34,40 @@ import (
 )
 
 type staticPolicyTest struct {
-	description     string
-	topo            *topology.CPUTopology
-	numReservedCPUs int
-	reservedCPUs    *cpuset.CPUSet
-	podUID          string
-	options         map[string]string
-	containerName   string
-	stAssignments   state.ContainerCPUAssignments
-	stDefaultCPUSet cpuset.CPUSet
-	pod             *v1.Pod
-	topologyHint    *topologymanager.TopologyHint
-	expErr          error
-	expCPUAlloc     bool
-	expCSet         cpuset.CPUSet
+	description         string
+	topo                *topology.CPUTopology
+	numReservedCPUs     int
+	reservedCPUs        *cpuset.CPUSet
+	podUID              string
+	options             map[string]string
+	containerName       string
+	stAssignments       state.ContainerCPUAssignments
+	stDefaultCPUSet     cpuset.CPUSet
+	pod                 *v1.Pod
+	topologyHint        *topologymanager.TopologyHint
+	expErr              error
+	expCPUAlloc         bool
+	expCSet             cpuset.CPUSet
+	managementPartition bool
 }
 
 // this is not a real Clone() - hence Pseudo- - because we don't clone some
 // objects which are accessed read-only
 func (spt staticPolicyTest) PseudoClone() staticPolicyTest {
 	return staticPolicyTest{
-		description:     spt.description,
-		topo:            spt.topo, // accessed in read-only
-		numReservedCPUs: spt.numReservedCPUs,
-		podUID:          spt.podUID,
-		options:         spt.options, // accessed in read-only
-		containerName:   spt.containerName,
-		stAssignments:   spt.stAssignments.Clone(),
-		stDefaultCPUSet: spt.stDefaultCPUSet.Clone(),
-		pod:             spt.pod, // accessed in read-only
-		expErr:          spt.expErr,
-		expCPUAlloc:     spt.expCPUAlloc,
-		expCSet:         spt.expCSet.Clone(),
+		description:         spt.description,
+		topo:                spt.topo, // accessed in read-only
+		numReservedCPUs:     spt.numReservedCPUs,
+		podUID:              spt.podUID,
+		options:             spt.options, // accessed in read-only
+		containerName:       spt.containerName,
+		stAssignments:       spt.stAssignments.Clone(),
+		stDefaultCPUSet:     spt.stDefaultCPUSet.Clone(),
+		pod:                 spt.pod, // accessed in read-only
+		expErr:              spt.expErr,
+		expCPUAlloc:         spt.expCPUAlloc,
+		expCSet:             spt.expCSet.Clone(),
+		managementPartition: spt.managementPartition,
 	}
 }
 
@@ -108,6 +111,23 @@ func TestStaticPolicyStart(t *testing.T) {
 			expErr:          fmt.Errorf("not all reserved cpus: \"0,6\" are present in defaultCpuSet: \"0-1\""),
 		},
 		{
+			description:         "reserved cores 0 & 6 are not present in available cpuset but management partitioning is enabled",
+			topo:                topoDualSocketHT,
+			numReservedCPUs:     2,
+			stAssignments:       state.ContainerCPUAssignments{},
+			managementPartition: true,
+			expCSet:             cpuset.New(1, 2, 3, 4, 5, 7, 8, 9, 10, 11),
+		},
+		{
+			description:         "reserved cores 0 & 6 are not present in available cpuset but management partitioning is enabled during recovery",
+			topo:                topoDualSocketHT,
+			numReservedCPUs:     2,
+			stAssignments:       state.ContainerCPUAssignments{},
+			stDefaultCPUSet:     cpuset.New(1, 2, 3, 4, 5, 7, 8, 9, 10, 11),
+			managementPartition: true,
+			expCSet:             cpuset.New(1, 2, 3, 4, 5, 7, 8, 9, 10, 11),
+		},
+		{
 			description: "assigned core 2 is still present in available cpuset",
 			topo:        topoDualSocketHT,
 			stAssignments: state.ContainerCPUAssignments{
@@ -145,6 +165,7 @@ func TestStaticPolicyStart(t *testing.T) {
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.description, func(t *testing.T) {
+			managed.TestOnlySetEnabled(testCase.managementPartition)
 			p, _ := NewStaticPolicy(testCase.topo, testCase.numReservedCPUs, cpuset.New(), topologymanager.NewFakeManager(), nil)
 			policy := p.(*staticPolicy)
 			st := &mockState{
