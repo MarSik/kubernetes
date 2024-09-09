@@ -368,8 +368,19 @@ func (p *staticPolicy) Allocate(s state.State, pod *v1.Pod, container *v1.Contai
 	hint := p.affinity.GetAffinity(string(pod.UID), container.Name)
 	klog.InfoS("Topology Affinity", "pod", klog.KObj(pod), "containerName", container.Name, "affinity", hint)
 
+	// TEST Consume cpu mask from pod annotations
+	var debugCpuMask cpuset.CPUSet
+	cpumask_str, ok := pod.Annotations["debug.kubelet/cpumask"]
+	if ok {
+		var err error
+		debugCpuMask, err = cpuset.Parse(cpumask_str)
+		if err != nil {
+			klog.ErrorS(err, "Provided debugging cpumask invalid", "cpumask", cpumask_str, "pod", pod.Name)
+		}
+	}
+
 	// Allocate CPUs according to the NUMA affinity contained in the hint.
-	cpuset, err := p.allocateCPUs(s, numCPUs, hint.NUMANodeAffinity, p.cpusToReuse[string(pod.UID)])
+	cpuset, err := p.allocateCPUs(s, numCPUs, hint.NUMANodeAffinity, p.cpusToReuse[string(pod.UID)], debugCpuMask)
 	if err != nil {
 		klog.ErrorS(err, "Unable to allocate CPUs", "pod", klog.KObj(pod), "containerName", container.Name, "numCPUs", numCPUs)
 		return err
@@ -405,10 +416,14 @@ func (p *staticPolicy) RemoveContainer(s state.State, podUID string, containerNa
 	return nil
 }
 
-func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet) (cpuset.CPUSet, error) {
+func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet, debugMask cpuset.CPUSet) (cpuset.CPUSet, error) {
 	klog.InfoS("AllocateCPUs", "numCPUs", numCPUs, "socket", numaAffinity)
 
 	allocatableCPUs := p.GetAvailableCPUs(s).Union(reusableCPUs)
+	if !debugMask.IsEmpty() {
+		allocatableCPUs = allocatableCPUs.Intersection(debugMask)
+		klog.Warningf("using debug cpu mask %v, final allocatable %v", debugMask, allocatableCPUs)
+	}
 
 	// If there are aligned CPUs in numaAffinity, attempt to take those first.
 	result := cpuset.New()
@@ -434,6 +449,10 @@ func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bit
 		return cpuset.New(), err
 	}
 	result = result.Union(remainingCPUs)
+
+	if result.IsEmpty() {
+		return cpuset.New(), fmt.Errorf("empty cpu mask computed?!")
+	}
 
 	// Remove allocated CPUs from the shared CPUSet.
 	s.SetDefaultCPUSet(s.GetDefaultCPUSet().Difference(result))

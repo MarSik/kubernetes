@@ -924,7 +924,108 @@ func TestTopologyAwareAllocateCPUs(t *testing.T) {
 			continue
 		}
 
-		cset, err := policy.allocateCPUs(st, tc.numRequested, tc.socketMask, cpuset.New())
+		cset, err := policy.allocateCPUs(st, tc.numRequested, tc.socketMask, cpuset.New(), cpuset.New())
+		if err != nil {
+			t.Errorf("StaticPolicy allocateCPUs() error (%v). expected CPUSet %v not error %v",
+				tc.description, tc.expCSet, err)
+			continue
+		}
+
+		if !reflect.DeepEqual(tc.expCSet, cset) {
+			t.Errorf("StaticPolicy allocateCPUs() error (%v). expected CPUSet %v but got %v",
+				tc.description, tc.expCSet, cset)
+		}
+	}
+}
+
+func TestTopologyAwareAllocateCPUsWithDebugMask(t *testing.T) {
+	testCases := []struct {
+		description     string
+		topo            *topology.CPUTopology
+		stAssignments   state.ContainerCPUAssignments
+		stDefaultCPUSet cpuset.CPUSet
+		numRequested    int
+		socketMask      bitmask.BitMask
+		expCSet         cpuset.CPUSet
+		debugMask       cpuset.CPUSet
+	}{
+		{
+			description:     "Request 2 CPUs, No BitMask",
+			topo:            topoDualSocketHT,
+			stAssignments:   state.ContainerCPUAssignments{},
+			stDefaultCPUSet: cpuset.New(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+			numRequested:    2,
+			socketMask:      nil,
+			expCSet:         cpuset.New(2, 8),
+			debugMask:       cpuset.New(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+		},
+		{
+			description:     "Request 2 CPUs, BitMask on Socket 0",
+			topo:            topoDualSocketHT,
+			stAssignments:   state.ContainerCPUAssignments{},
+			stDefaultCPUSet: cpuset.New(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+			numRequested:    2,
+			socketMask: func() bitmask.BitMask {
+				mask, _ := bitmask.NewBitMask(0)
+				return mask
+			}(),
+			expCSet:   cpuset.New(2, 8),
+			debugMask: cpuset.New(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+		},
+		{
+			description:     "Request 2 CPUs, BitMask on Socket 1",
+			topo:            topoDualSocketHT,
+			stAssignments:   state.ContainerCPUAssignments{},
+			stDefaultCPUSet: cpuset.New(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+			numRequested:    2,
+			socketMask: func() bitmask.BitMask {
+				mask, _ := bitmask.NewBitMask(1)
+				return mask
+			}(),
+			expCSet:   cpuset.New(1, 7),
+			debugMask: cpuset.New(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+		},
+		{
+			description:     "Request 8 CPUs, BitMask on Socket 0",
+			topo:            topoDualSocketHT,
+			stAssignments:   state.ContainerCPUAssignments{},
+			stDefaultCPUSet: cpuset.New(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+			numRequested:    8,
+			socketMask: func() bitmask.BitMask {
+				mask, _ := bitmask.NewBitMask(0)
+				return mask
+			}(),
+			expCSet:   cpuset.New(3, 4, 5, 6, 8, 9, 10, 11),
+			debugMask: cpuset.New(3, 4, 5, 6, 7, 8, 9, 10, 11),
+		},
+		{
+			description:     "Request 8 CPUs, BitMask on Socket 1",
+			topo:            topoDualSocketHT,
+			stAssignments:   state.ContainerCPUAssignments{},
+			stDefaultCPUSet: cpuset.New(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+			numRequested:    8,
+			socketMask: func() bitmask.BitMask {
+				mask, _ := bitmask.NewBitMask(1)
+				return mask
+			}(),
+			expCSet:   cpuset.New(1, 3, 5, 7, 8, 9, 10, 11),
+			debugMask: cpuset.New(1, 3, 5, 7, 8, 9, 10, 11),
+		},
+	}
+	for _, tc := range testCases {
+		p, _ := NewStaticPolicy(tc.topo, 0, cpuset.New(), topologymanager.NewFakeManager(), nil)
+		policy := p.(*staticPolicy)
+		st := &mockState{
+			assignments:   tc.stAssignments,
+			defaultCPUSet: tc.stDefaultCPUSet,
+		}
+		err := policy.Start(st)
+		if err != nil {
+			t.Errorf("StaticPolicy Start() error (%v)", err)
+			continue
+		}
+
+		cset, err := policy.allocateCPUs(st, tc.numRequested, tc.socketMask, cpuset.New(), tc.debugMask)
 		if err != nil {
 			t.Errorf("StaticPolicy allocateCPUs() error (%v). expected CPUSet %v not error %v",
 				tc.description, tc.expCSet, err)
